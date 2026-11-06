@@ -31,7 +31,7 @@ type Encoder = Obj<dyn MTLComputeCommandEncoder>;
 /// Most samples one megakernel thread takes in a row. Fewer dispatches cut the launch cost and the
 /// wait for each dispatch's slowest path; more would risk long-running command buffers.
 const SAMPLES_PER_DISPATCH: u32 = 8;
-fn upload<T: Copy>(ctx: &MetalContext, data: &[T]) -> Result<Obj<dyn MTLBuffer>, Error> {
+pub(crate) fn upload<T: Copy>(ctx: &MetalContext, data: &[T]) -> Result<Obj<dyn MTLBuffer>, Error> {
     // Metal rejects zero-length buffers; a dummy word keeps empty tables bindable.
     let zero = [0u8; 4];
     let (ptr, len) = if data.is_empty() {
@@ -52,7 +52,7 @@ fn upload<T: Copy>(ctx: &MetalContext, data: &[T]) -> Result<Obj<dyn MTLBuffer>,
     .ok_or(Error::Resource("buffer"))
 }
 
-fn pipeline(
+pub(crate) fn pipeline(
     ctx: &MetalContext,
     msl: &str,
     entry: &str,

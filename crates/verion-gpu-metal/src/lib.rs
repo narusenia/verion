@@ -2,9 +2,11 @@
 #![cfg(target_os = "macos")]
 
 mod accel;
+mod nrc;
 mod renderer;
 
 pub use accel::{Blas, Instance, Tlas};
+pub use nrc::{NRC_SAMPLE_WORDS, Nrc};
 pub use renderer::{Accumulation, Renderer};
 pub use verion_gpu::{Adaptive, Aovs, Integrator, LightingAovs, MemoryUsage};
 
