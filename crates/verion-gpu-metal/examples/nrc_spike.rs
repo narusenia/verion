@@ -23,7 +23,8 @@ fn batch(rng: &mut u32, n: usize) -> Vec<[f32; NRC_SAMPLE_WORDS]> {
             let nrm = [r * a.cos(), z, r * a.sin()];
             let t = target(p, nrm);
             [
-                p[0], p[1], p[2], nrm[0], nrm[1], nrm[2], t[0], t[1], t[2], 0.0, 0.0, 0.0,
+                p[0], p[1], p[2], nrm[0], nrm[1], nrm[2], t[0], t[1], t[2], 1.0, 0.0,
+                0.0, // word 9: valid
             ]
         })
         .collect()

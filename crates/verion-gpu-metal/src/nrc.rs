@@ -201,7 +201,8 @@ impl NrcNet {
         let out = zeros(&self.ctx, queries.len() * 3)?;
         let t = self.dispatch(
             &self.infer,
-            &[(0, &self.p), (4, &cfg), (5, &data), (6, &out)],
+            // nrc_infer declares only P, cfg, queries, out, so Slang numbers them 0..3.
+            &[(0, &self.p), (1, &cfg), (2, &data), (3, &out)],
             queries.len(),
         )?;
         let mut v = vec![[0f32; 3]; queries.len()];
