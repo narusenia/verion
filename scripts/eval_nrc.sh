@@ -6,13 +6,15 @@
 # 128 spp. A variant that trains (NRC) writes `train_s` into its metrics; it is added to the time, and the report
 # shows the peak GPU memory next to it.
 # Needs a Metal GPU; not run in CI.
-# Usage: eval_nrc.sh [reference spp]. Env: SEEDS (16), VARIANTS (default "reference interactive+gi"), SCENES.
+# Variants: reference, interactive+gi (ReSTIR GI), nrc (--mode interactive --nrc).
+# Usage: eval_nrc.sh [reference spp]. Env: SEEDS (16), VARIANTS (default "reference interactive+gi nrc"), SCENES, APPEND=1
+# (keep the runs already in runs.csv, to add one variant).
 # Output: target/eval-nrc/{runs.csv,report.md}
 set -eu
 out=target/eval-nrc
 ref_spp=${1:-16384}
 seeds=${SEEDS:-16}
-variants=${VARIANTS:-"reference interactive+gi"}
+variants=${VARIANTS:-"reference interactive+gi nrc"}
 scenes=${SCENES:-"scenes/indoor.gltf scenes/cornell_diffuse.gltf scenes/cornell_box.gltf scenes/many_lights.gltf"}
 size="--width 512 --height 384"
 mkdir -p "$out"
@@ -20,7 +22,7 @@ cargo build --release -q -p verion-render-cli
 cargo build --release -q -p verion-render-io --example exr_diff
 cli=./target/release/render-cli
 diff() { ./target/release/examples/exr_diff "$1" "$2" | grep -o 'mae/mean [^ ]*' | awk '{print $2}'; }
-echo "scene,variant,spp,seed,gpu_s,train_s,peak_bytes,mae" > "$out/runs.csv"
+[ -n "${APPEND:-}" ] || echo "scene,variant,spp,seed,gpu_s,train_s,peak_bytes,mae" > "$out/runs.csv"
 for scene in $scenes; do
   name=$(basename "$scene" .gltf)
   # The reference has its own stream (seed 1000), so it is not correlated with the seeds under test.
@@ -29,6 +31,7 @@ for scene in $scenes; do
     for variant in $variants; do
       mode=${variant%+gi}; flag=
       [ "$variant" = interactive+gi ] && flag=--restir-gi
+      [ "$variant" = nrc ] && { mode=interactive; flag=--nrc; }
       seed=1
       while [ "$seed" -le "$seeds" ]; do
         f="$out/run"

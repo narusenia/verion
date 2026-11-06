@@ -206,3 +206,50 @@ fn a_new_instance_rebuilds_everything_but_keeps_the_settings() {
     assert_eq!((report.blases_built, report.tlas_built), (3, true));
     assert_eq!(r.integrator(), verion_gpu::Integrator::Wavefront);
 }
+
+fn channel_means(img: &[[f32; 3]]) -> [f32; 3] {
+    let n = img.len() as f32;
+    std::array::from_fn(|c| img.iter().map(|p| p[c]).sum::<f32>() / n)
+}
+
+/// The neural radiance cache learned the room as it was; after a wall color edit it must follow, so that the
+/// indirect light on the floor the camera sees turns red (ADR-0017, M7 item 6).
+#[test]
+fn the_neural_radiance_cache_follows_a_wall_color_edit() {
+    let Some(ctx) = context() else { return };
+    let mut room = room();
+    let mut r = Renderer::new(&ctx, &room.scene).unwrap();
+    // The edit stays below albedo 0.7: the physical renderer stops at 8 bounces, which loses too much in a brighter closed room.
+    let nrc = verion_gpu::NrcSettings::default();
+    let render_nrc = |r: &mut Renderer, spp: u32| {
+        r.set_nrc(Some(nrc)).unwrap();
+        let mut acc = r.new_accumulation(48, 48, false).unwrap();
+        r.accumulate(&mut acc, spp).unwrap();
+        r.set_nrc(None).unwrap();
+        acc.mean()
+    };
+    let grey = channel_means(&render_nrc(&mut r, 256));
+    room.scene
+        .set_material(room.walls, diffuse([0.65, 0.2, 0.2], [0.0; 3]));
+    let changes = room.scene.take_changes();
+    r.update(&room.scene, &changes).unwrap();
+    let red = channel_means(&render_nrc(&mut r, 256));
+    let physical = Renderer::new(&ctx, &room.scene).unwrap();
+    let truth = {
+        let mut acc = physical.new_accumulation(48, 48, false).unwrap();
+        physical.accumulate(&mut acc, 256).unwrap();
+        channel_means(&acc.mean())
+    };
+    assert!(
+        red[0] > grey[0] * 1.02 && red[1] < grey[1] * 0.98,
+        "the cache did not follow: {grey:?} -> {red:?}"
+    );
+    for c in 0..3 {
+        assert!(
+            (red[c] / truth[c] - 1.0).abs() < 0.1,
+            "channel {c}: cache {} against physical {}",
+            red[c],
+            truth[c]
+        );
+    }
+}
