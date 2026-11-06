@@ -2,7 +2,7 @@
 //! position and normal (a stand-in for irradiance), so the numbers are about the network, not the renderer.
 //! Run: cargo run --release -p verion-gpu-metal --example nrc_spike [samples per step] [steps]
 
-use verion_gpu_metal::{MetalContext, NRC_SAMPLE_WORDS, Nrc};
+use verion_gpu_metal::{MetalContext, NRC_SAMPLE_WORDS, NrcNet};
 
 fn target(p: [f32; 3], n: [f32; 3]) -> [f32; 3] {
     let s = 0.5 + 0.5 * (3.0 * p[0]).sin() * (2.0 * p[2]).cos();
@@ -39,7 +39,7 @@ fn main() {
         args.get(1).copied().unwrap_or(300),
     );
     let ctx = MetalContext::new().expect("Metal GPU");
-    let mut nrc = Nrc::new(&ctx, [-2.0; 3], 4.0).expect("nrc");
+    let mut nrc = NrcNet::new(&ctx, [-2.0; 3], 4.0).expect("nrc");
     let mut rng = 1u32;
     let mut train_s = Vec::new();
     for step in 1..=steps {

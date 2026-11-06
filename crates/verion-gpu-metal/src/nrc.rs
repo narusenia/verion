@@ -29,7 +29,7 @@ const PARAMS: usize = W1 + H * IN + H + H * H + H + 3 * H + 3;
 const LR_TABLE: f32 = 1e-2;
 const LR_MLP: f32 = 1e-2;
 
-pub struct Nrc {
+pub struct NrcNet {
     ctx: MetalContext,
     p: Obj<dyn MTLBuffer>,
     g: Obj<dyn MTLBuffer>,
@@ -50,10 +50,10 @@ fn zeros(ctx: &MetalContext, floats: usize) -> Result<Obj<dyn MTLBuffer>, Error>
         .ok_or(Error::Resource("nrc buffer"))
 }
 
-impl Nrc {
+impl NrcNet {
     /// A fresh network for points inside the cube from `min` with side `extent` (points outside are clamped to it).
     pub fn new(ctx: &MetalContext, min: [f32; 3], extent: f32) -> Result<Self, Error> {
-        // Deterministic init: tiny grid features, He-uniform MLP weights, zero biases.
+        // Deterministic init: tiny grid features, He-uniform MLP weights, zero biases (the output's start low).
         let mut state = 0x1234_5678u32;
         let mut uniform = move || {
             state = state.wrapping_mul(747_796_405).wrapping_add(2_891_336_453);
@@ -71,6 +71,8 @@ impl Nrc {
             }
             at += weights + biases;
         }
+        // The output is a softplus; start it near zero, as light is, rather than at 0.69.
+        init[PARAMS - 3..].fill(-3.0);
         Ok(Self {
             ctx: ctx.clone(),
             p: upload(ctx, &init)?,
@@ -83,6 +85,16 @@ impl Nrc {
             bounds: [min[0], min[1], min[2], 1.0 / extent],
             step: 0,
         })
+    }
+
+    /// The parameters, which the path tracer binds where the ReSTIR reservoirs would go.
+    pub(crate) fn params(&self) -> &Obj<dyn MTLBuffer> {
+        &self.p
+    }
+
+    /// The step the next `train_buffer` call takes (from 1); the collect kernel uses it to vary its random numbers.
+    pub(crate) fn next_step(&self) -> u32 {
+        self.step + 1
     }
 
     /// GPU memory of the network, the gradients and the optimizer state.
@@ -148,13 +160,22 @@ impl Nrc {
 
     /// One Adam step on a batch of samples (target = the cache's value there). Returns the GPU seconds.
     pub fn train(&mut self, samples: &[[f32; NRC_SAMPLE_WORDS]]) -> Result<f64, Error> {
-        self.step += 1;
-        let cfg = self.cfg(samples.len(), self.step)?;
         let data = upload(&self.ctx, samples)?;
+        self.train_buffer(&data, samples.len())
+    }
+
+    /// `train` on `count` samples already in a GPU buffer (invalid ones, word 9 below 0.5, are skipped).
+    pub(crate) fn train_buffer(
+        &mut self,
+        data: &Obj<dyn MTLBuffer>,
+        count: usize,
+    ) -> Result<f64, Error> {
+        self.step += 1;
+        let cfg = self.cfg(count, self.step)?;
         let t = self.dispatch(
             &self.train,
-            &[(0, &self.p), (1, &self.g), (4, &cfg), (5, &data)],
-            samples.len().next_multiple_of(64),
+            &[(0, &self.p), (1, &self.g), (4, &cfg), (5, data)],
+            count.next_multiple_of(64),
         )?;
         let a = self.dispatch(
             &self.adam,

@@ -25,7 +25,8 @@ StructuredBuffer<uint> params;      // 0 width, 1 height, 2 tan(fov/2), 3 apertu
                                     // 30 / 31 wavefront depth and path count, 32 adaptive sampling enable, 33 adaptive threshold
                                     // (float), 34 adaptive minimum samples, 35 megakernel samples per dispatch, 36 ReSTIR DI enable,
                                     // 37 ReSTIR initial candidates per pixel, 38 ReSTIR history cap (samples a reused reservoir counts for),
-                                    // 39 / 40 lens shift x and y (floats, half-image extents), 41 virtual main light present, 42 transparent background, 43 seed (offsets the random streams)
+                                    // 39 / 40 lens shift x and y (floats, half-image extents), 41 virtual main light present, 42 transparent background, 43 seed (offsets the random streams),
+                                    // 44 neural radiance cache on, 45..47 its cube minimum, 48 its inverse extent (floats)
 RWStructuredBuffer<float> accum;    // running radiance sum, xyz per pixel
 StructuredBuffer<float> emitters;   // 16 words per emissive world-space triangle: p0, p1, p2, radiance rgb, area, selection pdf, 2 pad
 StructuredBuffer<float> emitCdf;    // cumulative selection probability per emitter triangle, last entry 1
@@ -51,6 +52,8 @@ RWStructuredBuffer<float> pixelStats; // used only when params[32] != 0; 3 float
 // Fixed when the pipeline is created: false compiles ReSTIR out, so a renderer without it pays nothing
 // for its registers. params[36] still picks DI and GI at run time when this is true.
 [SpecializationConstant] const bool restirCompiled = true;
+// Likewise for the neural radiance cache (M7): false compiles its query and the path cut out.
+[SpecializationConstant] const bool nrcCompiled = true;
 
 RWStructuredBuffer<float> restir;   // used only when params[36] != 0 (ReSTIR, REQ-ACC-002): 80 floats per pixel: two halves of
                                     // 28, the current frame's and the previous one's, swapped by sample parity, then 24 of scratch.
@@ -84,6 +87,12 @@ struct Rng
 };
 
 float pf(uint i) { return asfloat(params[i]); }
+
+// The neural radiance cache (REQ-ACC-004) shares binding 19 with ReSTIR, which it excludes: its parameters sit where
+// the reservoirs would. params[44] switches it on, 45..47 are the cube's minimum, 48 its inverse extent.
+#define nrcP restir
+float4 nrcBounds() { return float4(pf(45), pf(46), pf(47), pf(48)); }
+#include "nrc_net.slang"
 
 float3 vertexPos(uint v) { return float3(positions[3 * v], positions[3 * v + 1], positions[3 * v + 2]); }
 
@@ -1218,6 +1227,11 @@ bool shadePath(inout PathState st, Hit hq, uint depth, uint pixel)
         float sheenR = max(materials[mi + 17], 0.07);
         surf.sheenAlpha = sheenR * sheenR;
         surf.sheenP = sheenMax > 0.0 ? sheenMax * sheenAlbedo(woL.z, sheenR) : 0.0;
+        // Neural radiance cache: the second vertex of a path whose first bounce was diffuse, on a surface that is only
+        // diffuse (plus a specular coat the cache leaves out), ends the path; the cache stands in for the rest. Light
+        // sampling there then takes the whole weight (no BSDF-sampled continuation to share it with).
+        bool nrcCut = nrcCompiled && params[44] != 0 && depth == 1 && cls == 0 && !st.gi
+            && metallic == 0.0 && transmission == 0.0 && surf.coat == 0.0 && surf.sheenP == 0.0;
 
         // Next-event estimation for delta lights (no MIS: sampling can never hit them). Includes the
         // reflective lobes only; rough transmission of a delta light is not evaluated.
@@ -1371,7 +1385,7 @@ bool shadePath(inout PathState st, Hit hq, uint depth, uint pixel)
                     float pl = (1.0 - pEnv) * emitters[e + 13] * d2 / (emitters[e + 12] * cosl);
                     float3 wiL = float3(dot(wi, T), dot(wi, B), cosi);
                     float qb = reflectivePdf(surf, woL, wiL);
-                    float wl = pl * pl / (pl * pl + qb * qb);
+                    float wl = nrcCut ? 1.0 : pl * pl / (pl * pl + qb * qb);
                     float3 le = float3(emitters[e + 9], emitters[e + 10], emitters[e + 11]);
                     Lobes l = evalLobes(surf, woL, wiL);
                     float3 cd = thr * l.diffuse * le / pl * wl;
@@ -1408,7 +1422,7 @@ bool shadePath(inout PathState st, Hit hq, uint depth, uint pixel)
                     float pl = pEnvHere * pdfE;
                     float3 wiL = float3(dot(wi, T), dot(wi, B), cosi);
                     float qb = reflectivePdf(surf, woL, wiL);
-                    float wl = pl * pl / (pl * pl + qb * qb);
+                    float wl = nrcCut ? 1.0 : pl * pl / (pl * pl + qb * qb);
                     Lobes l = evalLobes(surf, woL, wiL);
                     float3 cd = thr * l.diffuse * leE / pl * wl;
                     float3 cs = thr * l.specular * leE / pl * wl;
@@ -1424,6 +1438,14 @@ bool shadePath(inout PathState st, Hit hq, uint depth, uint pixel)
                     }
                 }
             }
+        }
+
+        if (nrcCut)
+        {
+            // What reaches this point after at least one more scattering, times the diffuse lobe's share of the albedo.
+            st.parts.add(depth, cls, thr * albedo * (1.0 - fSel) * nrcQuery(p, n));
+            alive = false;
+            break;
         }
 
         // Sample one lobe by its weight, then apply that lobe's own sampling weight, which already

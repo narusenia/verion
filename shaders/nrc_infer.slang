@@ -1,4 +1,7 @@
 // Batch inference of the NRC for nrcCfg[0] queries (position, normal), 12 words each; writes rgb to inferOut.
+RWStructuredBuffer<float> nrcP;
+StructuredBuffer<uint> nrcCfg;
+float4 nrcBounds() { return float4(asfloat(nrcCfg[2]), asfloat(nrcCfg[3]), asfloat(nrcCfg[4]), asfloat(nrcCfg[5])); }
 #include "include/nrc_net.slang"
 
 StructuredBuffer<float> inferQueries;

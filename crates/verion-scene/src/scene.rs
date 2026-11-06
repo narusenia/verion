@@ -246,6 +246,22 @@ impl Scene {
         &self.instances
     }
 
+    /// Corners of the box around every instance in world space, or `None` for a scene without geometry.
+    pub fn bounds(&self) -> Option<([f32; 3], [f32; 3])> {
+        let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+        for inst in &self.instances {
+            for p in self.meshes[inst.mesh.index()].positions() {
+                for a in 0..3 {
+                    let t = inst.transform[a];
+                    let v = t[0] * p[0] + t[1] * p[1] + t[2] * p[2] + t[3];
+                    lo[a] = lo[a].min(v);
+                    hi[a] = hi[a].max(v);
+                }
+            }
+        }
+        (lo[0] <= hi[0]).then_some((lo, hi))
+    }
+
     pub fn lights(&self) -> &[Light] {
         &self.lights
     }

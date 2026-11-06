@@ -401,6 +401,7 @@ mod imp {
                     denoiser: None,
                     adaptive_threshold: None,
                     restir: None,
+                    nrc: false,
                 },
             };
             let path = dir.join("env.exr");
@@ -426,6 +427,7 @@ mod imp {
                     denoiser: None,
                     adaptive_threshold: None,
                     restir: None,
+                    nrc: false,
                 },
             };
             let linear = OutputTransform::linear(scene.working_space());
@@ -476,6 +478,7 @@ mod imp {
                 denoiser: None,
                 adaptive_threshold: None,
                 restir: None,
+                nrc: false,
             },
         };
         write_exr(

@@ -1,6 +1,10 @@
 //! Uploads a Scene IR snapshot and renders AOVs with the Slang-generated kernels.
 
-use std::{cell::OnceCell, ffi::c_void, ptr::NonNull};
+use std::{
+    cell::{OnceCell, RefCell},
+    ffi::c_void,
+    ptr::NonNull,
+};
 
 mod wavefront;
 
@@ -14,17 +18,18 @@ use objc2_metal::{
 use verion_scene::{Camera, Changes, Scene};
 
 use verion_gpu::{
-    Accumulation as _, Adaptive, Aovs, Integrator, LightingAovs, MemoryUsage, RayTracingBackend,
-    Restir, UpdateReport,
+    Accumulation as _, Adaptive, Aovs, Integrator, LightingAovs, MemoryUsage, NrcSettings,
+    RayTracingBackend, Restir, UpdateReport,
     pack::{self, MeshRange, PARAM_WORDS, SceneInfo, View},
     readback,
 };
 
-use crate::{Blas, Error, Instance, MetalContext, Obj, Tlas};
+use crate::{Blas, Error, Instance, MetalContext, NrcNet, Obj, Tlas};
 
 const NORMALS_MSL: &str = include_str!("../shaders/normals.metal");
 const AOV_MSL: &str = include_str!("../shaders/aov.metal");
 const PATHTRACE_MSL: &str = include_str!("../shaders/pathtrace.metal");
+const COLLECT_MSL: &str = include_str!("../shaders/nrc_collect.metal");
 
 type CommandBuffer = Obj<dyn objc2_metal::MTLCommandBuffer>;
 type Encoder = Obj<dyn MTLComputeCommandEncoder>;
@@ -57,17 +62,19 @@ pub(crate) fn pipeline(
     msl: &str,
     entry: &str,
 ) -> Result<Obj<dyn MTLComputePipelineState>, Error> {
-    pipeline_with(ctx, msl, entry, true)
+    pipeline_with(ctx, msl, entry, true, true)
 }
 
 /// `restir_compiled` is the `restirCompiled` specialization constant (function constant 0) of the
 /// kernels that carry ReSTIR: false compiles it out, so a renderer without it pays nothing for its
-/// registers. The other kernels do not declare it and ignore the value.
+/// registers. `nrc_compiled` (function constant 1) does the same for the neural radiance cache. The other
+/// kernels do not declare them and ignore the values.
 fn pipeline_with(
     ctx: &MetalContext,
     msl: &str,
     entry: &str,
     restir_compiled: bool,
+    nrc_compiled: bool,
 ) -> Result<Obj<dyn MTLComputePipelineState>, Error> {
     let lib = ctx
         .device
@@ -76,12 +83,17 @@ fn pipeline_with(
     let name = NSString::from_str(entry);
     let func = if msl.contains("function_constant(0)") {
         let values = MTLFunctionConstantValues::new();
-        // SAFETY: the pointer is valid for the one byte a Metal `bool` takes, and Metal copies it.
+        // SAFETY: the pointers are valid for the one byte a Metal `bool` takes, and Metal copies them.
         unsafe {
             values.setConstantValue_type_atIndex(
                 NonNull::from(&restir_compiled).cast(),
                 MTLDataType::Bool,
                 0,
+            );
+            values.setConstantValue_type_atIndex(
+                NonNull::from(&nrc_compiled).cast(),
+                MTLDataType::Bool,
+                1,
             );
         }
         lib.newFunctionWithName_constantValues_error(&name, &values)
@@ -129,7 +141,8 @@ pub struct Renderer {
     normals: Obj<dyn MTLComputePipelineState>,
     aov: Obj<dyn MTLComputePipelineState>,
     /// Indexed by whether ReSTIR is compiled in (`restirCompiled`); compiled on first use.
-    pathtrace: [OnceCell<Result<Obj<dyn MTLComputePipelineState>, Error>>; 2],
+    /// Indexed by `variant`: ReSTIR in bit 0, the neural radiance cache in bit 1.
+    pathtrace: [OnceCell<Result<Obj<dyn MTLComputePipelineState>, Error>>; 4],
     /// Bound in place of the lighting buffer when an accumulation has none.
     no_lighting: Obj<dyn MTLBuffer>,
     integrator: Integrator,
@@ -139,7 +152,13 @@ pub struct Renderer {
     restir: Option<Restir>,
     seed: u32,
     /// Compiled on first use, so megakernel-only users skip the compile.
-    wavefront: [OnceCell<Result<wavefront::Pipelines, Error>>; 2],
+    wavefront: [OnceCell<Result<wavefront::Pipelines, Error>>; 4],
+    nrc: Option<NrcSettings>,
+    /// The cache's network, made when the first accumulation needs it and dropped when the scene is edited.
+    nrc_net: RefCell<Option<NrcNet>>,
+    collect: OnceCell<Result<Obj<dyn MTLComputePipelineState>, Error>>,
+    /// Corner of the cube around the scene and its side, for the cache's positions.
+    bounds: ([f32; 3], f32),
 }
 
 impl Renderer {
@@ -217,6 +236,12 @@ impl Renderer {
             restir: None,
             seed: 0,
             wavefront: pipelines.3,
+            nrc: None,
+            nrc_net: RefCell::new(None),
+            collect: OnceCell::new(),
+            bounds: scene.bounds().map_or(([0.0; 3], 1.0), |(lo, hi)| {
+                (lo, (0..3).map(|a| hi[a] - lo[a]).fold(1.0e-3, f32::max))
+            }),
         })
     }
 
@@ -227,6 +252,10 @@ impl Renderer {
     /// Applies scene edits, redoing only what `pack::UpdatePlan` says (REQ-ACC-003).
     pub fn update(&mut self, scene: &Scene, changes: &Changes) -> Result<UpdateReport, Error> {
         let plan = pack::UpdatePlan::new(changes);
+        // What the cache learned is about the scene as it was; it learns again from scratch (M7 item 6 measures following instead).
+        if !changes.is_empty() {
+            *self.nrc_net.get_mut() = None;
+        }
         let mut report = UpdateReport::default();
         if plan.camera {
             self.view = View::new(scene.camera());
@@ -240,6 +269,8 @@ impl Renderer {
             fresh.stage_timing = self.stage_timing;
             fresh.adaptive = self.adaptive;
             fresh.restir = self.restir;
+            fresh.seed = self.seed;
+            fresh.nrc = self.nrc;
             report.blases_built = fresh.blases.len();
             report.tlas_built = true;
             *self = fresh;
@@ -371,6 +402,9 @@ pub struct Accumulation {
     /// ReSTIR DI only: the reservoirs of this frame and the last. Valid only under the setting the
     /// accumulation started with.
     restir: Option<(Obj<dyn MTLBuffer>, Restir)>,
+    /// GPU seconds of the neural radiance cache's training so far, and its memory.
+    train_seconds: f64,
+    nrc_bytes: usize,
 }
 
 impl Accumulation {
@@ -404,6 +438,11 @@ impl Renderer {
             .computeCommandEncoder()
             .ok_or(Error::Resource("compute encoder"))?;
         enc.setComputePipelineState(pipe);
+        let nrc_params = if self.nrc.is_some() {
+            self.nrc_net.borrow().as_ref().map(|n| n.params().clone())
+        } else {
+            None
+        };
         for blas in self.tlas.blases() {
             enc.useResource_usage(ProtocolObject::from_ref(&**blas), MTLResourceUsage::Read);
         }
@@ -437,13 +476,81 @@ impl Renderer {
                 0,
                 18,
             );
+            // The neural radiance cache excludes ReSTIR and takes its binding.
             enc.setBuffer_offset_atIndex(
-                Some(acc.restir.as_ref().map_or(&self.no_lighting, |r| &r.0)),
+                Some(
+                    nrc_params
+                        .as_ref()
+                        .or(acc.restir.as_ref().map(|r| &r.0))
+                        .unwrap_or(&self.no_lighting),
+                ),
                 0,
                 19,
             );
         }
         Ok((cb, enc))
+    }
+
+    /// Trains the neural radiance cache for `samples` more samples per pixel (and its warm-up when it is new):
+    /// each step collects `batch` training paths on the GPU and takes one Adam step on them.
+    fn train_nrc(
+        &self,
+        acc: &mut Accumulation,
+        s: NrcSettings,
+        params: &[u32; PARAM_WORDS],
+        samples: u32,
+    ) -> Result<(), Error> {
+        let mut steps = s.steps_per_spp * samples;
+        {
+            let mut slot = self.nrc_net.borrow_mut();
+            if slot.is_none() {
+                *slot = Some(NrcNet::new(&self.ctx, self.bounds.0, self.bounds.1)?);
+                steps += s.warmup_steps;
+            }
+        }
+        let pipe = self
+            .collect
+            .get_or_init(|| pipeline_with(&self.ctx, COLLECT_MSL, "nrc_collect", false, true));
+        let pipe = pipe.as_ref().map_err(Clone::clone)?;
+        let len = s.batch as usize * crate::NRC_SAMPLE_WORDS * size_of::<f32>();
+        self.ctx.check_fits(len)?;
+        let batch = self
+            .ctx
+            .device
+            .newBufferWithLength_options(len, MTLResourceOptions::StorageModeShared)
+            .ok_or(Error::Resource("nrc samples"))?;
+        for _ in 0..steps {
+            let mut p = *params;
+            p[6] = self.nrc_net.borrow().as_ref().map_or(1, NrcNet::next_step);
+            p[31] = s.batch;
+            let (cb, enc) = self.open_encoder(acc, pipe)?;
+            // SAFETY: 20 is `nrcSamples` of `shaders/nrc_collect.slang`; `p` outlives the call and Metal copies it.
+            unsafe {
+                enc.setBuffer_offset_atIndex(Some(&batch), 0, 20);
+                enc.setBytes_length_atIndex(NonNull::from(&p).cast(), size_of_val(&p), 6);
+            }
+            enc.dispatchThreads_threadsPerThreadgroup(
+                MTLSize {
+                    width: s.batch as usize,
+                    height: 1,
+                    depth: 1,
+                },
+                MTLSize {
+                    width: 64,
+                    height: 1,
+                    depth: 1,
+                },
+            );
+            enc.endEncoding();
+            cb.commit();
+            cb.waitUntilCompleted();
+            acc.train_seconds += cb.GPUEndTime() - cb.GPUStartTime();
+            let mut slot = self.nrc_net.borrow_mut();
+            let net = slot.as_mut().ok_or(Error::Resource("nrc network"))?;
+            acc.train_seconds += net.train_buffer(&batch, s.batch as usize)?;
+            acc.nrc_bytes = net.bytes() + len;
+        }
+        Ok(())
     }
 
     /// # Safety
@@ -523,6 +630,14 @@ impl verion_gpu::Accumulation for Accumulation {
 
     fn restir_bytes(&self) -> usize {
         self.restir.as_ref().map_or(0, |r| r.0.length())
+    }
+
+    fn train_seconds(&self) -> f64 {
+        self.train_seconds
+    }
+
+    fn nrc_bytes(&self) -> usize {
+        self.nrc_bytes
     }
 
     /// GPU seconds spent in the wavefront's extend (closest hit, with the dispatch sizing) and shade
@@ -618,6 +733,14 @@ impl RayTracingBackend for Renderer {
 
     fn set_seed(&mut self, seed: u32) {
         self.seed = seed;
+    }
+
+    fn set_nrc(&mut self, nrc: Option<NrcSettings>) -> Result<(), Error> {
+        if nrc.is_some_and(|s| s.batch == 0) {
+            return Err(Error::Scene("the NRC batch must be at least 1".into()));
+        }
+        self.nrc = nrc;
+        Ok(())
     }
 
     /// Turns ReSTIR DI on or off for accumulations started afterwards. It needs emissive
@@ -789,6 +912,19 @@ impl RayTracingBackend for Renderer {
             self.restir,
         );
         params[43] = self.seed;
+        if let Some(s) = self.nrc {
+            if self.restir.is_some() {
+                return Err(Error::Scene(
+                    "the neural radiance cache and ReSTIR exclude each other".into(),
+                ));
+            }
+            params[44] = 1;
+            for (dst, src) in params[45..48].iter_mut().zip(self.bounds.0) {
+                *dst = src.to_bits();
+            }
+            params[48] = (1.0 / self.bounds.1).to_bits();
+            self.train_nrc(acc, s, &params, samples)?;
+        }
 
         if acc.samples == 0 {
             acc.adaptive = self.adaptive;
@@ -847,9 +983,17 @@ impl RayTracingBackend for Renderer {
         if wavefront {
             self.run_wavefront(acc, &mut params, samples)?;
         } else {
-            let variant = usize::from(self.restir.is_some());
-            let pipe = self.pathtrace[variant]
-                .get_or_init(|| pipeline_with(&self.ctx, PATHTRACE_MSL, "pathtrace", variant == 1));
+            let variant =
+                usize::from(self.restir.is_some()) | (usize::from(self.nrc.is_some()) << 1);
+            let pipe = self.pathtrace[variant].get_or_init(|| {
+                pipeline_with(
+                    &self.ctx,
+                    PATHTRACE_MSL,
+                    "pathtrace",
+                    variant & 1 != 0,
+                    variant & 2 != 0,
+                )
+            });
             let (cb, enc) = self.open_encoder(acc, pipe.as_ref().map_err(Clone::clone)?)?;
             // SAFETY: `open_encoder` set bindings 0..18.
             unsafe { self.encode_megakernel(&enc, acc, &mut params, samples) };
@@ -906,6 +1050,8 @@ impl RayTracingBackend for Renderer {
             pixel_stats: None,
             adaptive: None,
             restir: None,
+            train_seconds: 0.0,
+            nrc_bytes: 0,
         })
     }
 }

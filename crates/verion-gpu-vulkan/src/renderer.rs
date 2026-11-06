@@ -7,7 +7,7 @@ use std::{cell::OnceCell, time::Instant};
 use ash::vk;
 use gpu_allocator::MemoryLocation;
 use verion_gpu::{
-    Adaptive, Aovs, Integrator, LightingAovs, MemoryUsage, RESTIR_FLOATS_PER_PIXEL,
+    Adaptive, Aovs, Integrator, LightingAovs, MemoryUsage, NrcSettings, RESTIR_FLOATS_PER_PIXEL,
     RayTracingBackend, Restir, UpdateReport,
     pack::{self, MAX_DEPTH, PARAM_WORDS, SceneInfo, View},
     readback,
@@ -302,6 +302,14 @@ impl verion_gpu::Accumulation for Accumulation {
         self.restir.as_ref().map_or(0, |r| r.2)
     }
 
+    fn train_seconds(&self) -> f64 {
+        0.0
+    }
+
+    fn nrc_bytes(&self) -> usize {
+        0
+    }
+
     fn mean(&self) -> Vec<[f32; 3]> {
         let sums = self.read(&self.buffer, self.pixels() * 3);
         readback::mean(&sums, &self.inverse_samples())
@@ -402,6 +410,16 @@ impl RayTracingBackend for Renderer {
 
     fn set_seed(&mut self, seed: u32) {
         self.seed = seed;
+    }
+
+    /// The Vulkan port waits for the Metal evaluation (M7 item 8); until then asking for the cache is an error.
+    fn set_nrc(&mut self, nrc: Option<NrcSettings>) -> Result<(), Error> {
+        match nrc {
+            None => Ok(()),
+            Some(_) => Err(Error::Scene(
+                "the neural radiance cache is not implemented on Vulkan yet".into(),
+            )),
+        }
     }
 
     /// Applies scene edits, redoing only what `pack::UpdatePlan` says (REQ-ACC-003). The pipelines

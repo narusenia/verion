@@ -34,6 +34,9 @@ pub struct RenderInfo {
     /// ReSTIR was on, `"di"` or `"di+gi"` (written as `verion/restir`). Its reuse is biased, so the
     /// frame is not physical.
     pub restir: Option<&'static str>,
+    /// The neural radiance cache was on (written as `verion/nrc`). It is biased and trained during the render, so
+    /// the frame is not physical.
+    pub nrc: bool,
 }
 
 /// Optional primary-ray AOVs (all the same size as the frame).
@@ -224,8 +227,9 @@ pub fn write_exr(
                 && untouched
                 && frame.info.denoiser.is_none()
                 && frame.info.adaptive_threshold.is_none()
-                && frame.info.restir.is_none())
-            .to_string(),
+                && frame.info.restir.is_none()
+                && !frame.info.nrc)
+                .to_string(),
         ),
     );
     other.insert(
@@ -247,6 +251,9 @@ pub fn write_exr(
     }
     if let Some(kind) = frame.info.restir {
         other.insert(Text::from("verion/restir"), text(kind.to_string()));
+    }
+    if frame.info.nrc {
+        other.insert(Text::from("verion/nrc"), text("true".to_string()));
     }
     if let Some(g) = frame.info.grade {
         other.insert(
@@ -317,6 +324,7 @@ mod tests {
                 denoiser: None,
                 adaptive_threshold: None,
                 restir: None,
+                nrc: false,
             },
         }
     }

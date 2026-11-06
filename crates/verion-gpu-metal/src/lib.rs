@@ -6,9 +6,9 @@ mod nrc;
 mod renderer;
 
 pub use accel::{Blas, Instance, Tlas};
-pub use nrc::{NRC_SAMPLE_WORDS, Nrc};
+pub use nrc::{NRC_SAMPLE_WORDS, NrcNet};
 pub use renderer::{Accumulation, Renderer};
-pub use verion_gpu::{Adaptive, Aovs, Integrator, LightingAovs, MemoryUsage};
+pub use verion_gpu::{Adaptive, Aovs, Integrator, LightingAovs, MemoryUsage, NrcSettings};
 
 use std::{
     fmt,

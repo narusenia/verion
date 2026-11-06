@@ -156,6 +156,18 @@ struct Args {
     /// submits each stage separately, so the total gets slower)
     #[arg(long)]
     stage_timing: bool,
+    /// Neural radiance cache: the second vertex of a diffuse path asks a small network, trained while the image
+    /// accumulates, for the light that reaches it instead of tracing on (REQ-ACC-004). Biased, so the output is
+    /// marked non-physical; rejected in reference mode. Replaces ReSTIR, including the one `--mode interactive` turns
+    /// on. Metal only for now
+    #[arg(long)]
+    nrc: bool,
+    /// Training paths per `--nrc` step
+    #[arg(long, default_value_t = 16384)]
+    nrc_batch: u32,
+    /// Training steps `--nrc` takes before the first sample
+    #[arg(long, default_value_t = 128)]
+    nrc_warmup: u32,
     /// Per-pixel adaptive sampling: a pixel stops once the standard error of its mean is at most
     /// this fraction of the mean (e.g. 0.02). `--spp` becomes the most a pixel takes. The
     /// output is marked non-physical (stopping on the pixel's own estimate biases it)
@@ -264,7 +276,7 @@ fn run_with<Backend: verion_gpu::RayTracingBackend>(
     backend: &str,
 ) -> Result<(), String> {
     use indicatif::{ProgressBar, ProgressStyle};
-    use verion_gpu::{Accumulation as _, Adaptive, Integrator, Restir};
+    use verion_gpu::{Accumulation as _, Adaptive, Integrator, NrcSettings, Restir};
     use verion_render_io::{
         ExrAovs, ExrFrame, ExrLighting, GradeInfo, RenderInfo, load_gltf_in, load_hdri, write_exr,
     };
@@ -275,8 +287,17 @@ fn run_with<Backend: verion_gpu::RayTracingBackend>(
     }
     let grade = args.color_grade()?;
     let interactive = args.mode == Mode::Interactive;
-    let restir_gi = args.restir_gi.unwrap_or(interactive);
-    let restir = args.restir || restir_gi || interactive;
+    if args.nrc && args.mode.physical() {
+        return Err("--nrc is not allowed in reference mode (the cache is biased)".into());
+    }
+    if args.nrc && (args.restir || args.restir_gi == Some(true)) {
+        return Err("--nrc and --restir exclude each other".into());
+    }
+    if args.nrc && args.nrc_batch == 0 {
+        return Err("--nrc-batch must be at least 1".into());
+    }
+    let restir_gi = !args.nrc && args.restir_gi.unwrap_or(interactive);
+    let restir = !args.nrc && (args.restir || restir_gi || interactive);
     if restir && args.mode.physical() {
         return Err("--restir is not allowed in reference mode (its reuse is biased)".into());
     }
@@ -321,6 +342,13 @@ fn run_with<Backend: verion_gpu::RayTracingBackend>(
         candidates: args.restir_candidates,
         history: args.restir_history,
     }));
+    renderer
+        .set_nrc(args.nrc.then_some(NrcSettings {
+            batch: args.nrc_batch,
+            warmup_steps: args.nrc_warmup,
+            steps_per_spp: 1,
+        }))
+        .map_err(|e| format!("nrc: {e:?}"))?;
     renderer.set_adaptive(args.adaptive.map(|threshold| Adaptive {
         threshold,
         min_spp: args.adaptive_min_spp,
@@ -352,6 +380,8 @@ fn run_with<Backend: verion_gpu::RayTracingBackend>(
     let gpu_s = acc.gpu_seconds();
     let wavefront_bytes = acc.wavefront_bytes();
     let restir_bytes = acc.restir_bytes();
+    let train_s = acc.train_seconds();
+    let nrc_bytes = acc.nrc_bytes();
     peak = peak.max(Backend::memory(&ctx).allocated);
     let stages = acc.stage_seconds().map_or(String::new(), |[e, s]| {
         format!("\"extend_s\":{e},\"shade_s\":{s},")
@@ -447,6 +477,7 @@ fn run_with<Backend: verion_gpu::RayTracingBackend>(
             denoiser: args.denoise.then_some("oidn"),
             adaptive_threshold: args.adaptive,
             restir: restir.then_some(if restir_gi { "di+gi" } else { "di" }),
+            nrc: args.nrc,
         },
     };
     let t = Instant::now();
@@ -460,7 +491,7 @@ fn run_with<Backend: verion_gpu::RayTracingBackend>(
 
     if let Some(path) = &args.metrics {
         let json = format!(
-            "{{\"backend\":{},\"scene\":{},\"output\":{},\"width\":{w},\"height\":{h},\"spp\":{},\"mode\":{},\"integrator\":\"{:?}\",\"adaptive\":{},\"restir\":{},\"mean_spp\":{mean_spp},\"wavefront_bytes\":{wavefront_bytes},\"restir_bytes\":{restir_bytes},\"gpu_budget_bytes\":{},\"gpu_peak_bytes\":{peak},\"upload_bytes\":{},\
+            "{{\"backend\":{},\"scene\":{},\"output\":{},\"width\":{w},\"height\":{h},\"spp\":{},\"mode\":{},\"integrator\":\"{:?}\",\"adaptive\":{},\"restir\":{},\"nrc\":{},\"mean_spp\":{mean_spp},\"train_s\":{train_s},\"nrc_bytes\":{nrc_bytes},\"wavefront_bytes\":{wavefront_bytes},\"restir_bytes\":{restir_bytes},\"gpu_budget_bytes\":{},\"gpu_peak_bytes\":{peak},\"upload_bytes\":{},\
 \"load_s\":{load_s},\"build_s\":{build_s},\"render_s\":{render_s},\"gpu_s\":{gpu_s},{stages}\"aov_s\":{aov_s},\"denoise_s\":{denoise_s},\"stylize_s\":{stylize_s},\
 \"write_s\":{write_s},\"total_s\":{}}}\n",
             json_str(backend),
@@ -471,6 +502,7 @@ fn run_with<Backend: verion_gpu::RayTracingBackend>(
             args.integrator,
             args.adaptive.map_or("null".into(), |t| t.to_string()),
             restir,
+            args.nrc,
             memory.budget,
             memory.uploaded,
             total.elapsed().as_secs_f64(),

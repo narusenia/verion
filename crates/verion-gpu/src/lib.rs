@@ -42,6 +42,9 @@ pub trait RayTracingBackend: Sized {
     /// Offsets the random streams of accumulations started afterwards (0 by default), so two renders of one
     /// scene are independent. The image's expectation does not change; evaluations take the spread over seeds.
     fn set_seed(&mut self, seed: u32);
+    /// The neural radiance cache for accumulations started afterwards (REQ-ACC-004). `None` is the plain path
+    /// tracer; it excludes ReSTIR, and Reference renders must leave it off (the cache is biased).
+    fn set_nrc(&mut self, nrc: Option<NrcSettings>) -> Result<(), Self::Error>;
 
     /// An empty running sum; `lighting` adds the per-pixel buffers of the lighting split.
     fn new_accumulation(
@@ -58,6 +61,31 @@ pub trait RayTracingBackend: Sized {
     fn render_normals(&self, width: u32, height: u32) -> Result<Vec<[f32; 3]>, Self::Error>;
     /// Albedo, depth and ids of the first hit through each pixel centre.
     fn render_aovs(&self, width: u32, height: u32) -> Result<Aovs, Self::Error>;
+}
+
+/// The neural radiance cache (M7, REQ-ACC-004): the second vertex of a diffuse path asks a small network for the
+/// light that reaches it after more scattering instead of tracing on. The network trains while the image
+/// accumulates, from short paths of its own, so the first samples are rough; the result is biased and non-physical.
+/// Surfaces that are not purely diffuse (metal, glass, coat, sheen) and every path whose first bounce is not
+/// diffuse keep the physical path tracer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NrcSettings {
+    /// Training paths per step.
+    pub batch: u32,
+    /// Training steps before the first sample (counted in the training time).
+    pub warmup_steps: u32,
+    /// Training steps per sample per pixel.
+    pub steps_per_spp: u32,
+}
+
+impl Default for NrcSettings {
+    fn default() -> Self {
+        Self {
+            batch: 16384,
+            warmup_steps: 128,
+            steps_per_spp: 1,
+        }
+    }
 }
 
 /// Floats of ReSTIR reservoir data per pixel (two frames and the scratch of the current one).
@@ -85,6 +113,10 @@ pub trait Accumulation {
     fn wavefront_bytes(&self) -> usize;
     /// GPU memory of the ReSTIR reservoirs (0 when ReSTIR is off).
     fn restir_bytes(&self) -> usize;
+    /// GPU seconds spent training the neural radiance cache so far (0 when it is off).
+    fn train_seconds(&self) -> f64;
+    /// GPU memory of the neural radiance cache and its training state (0 when it is off).
+    fn nrc_bytes(&self) -> usize;
     /// Mean radiance per pixel, row-major from the top-left. All zero before the first sample.
     fn mean(&self) -> Vec<[f32; 3]>;
     /// Mean lighting split, or `None` unless made with `lighting`.

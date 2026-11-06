@@ -1,8 +1,9 @@
 shaders/aov.slang 3489825845 8408
 shaders/normals.slang 3106127268 4763
-shaders/nrc_adam.slang 1885763535 653
-shaders/nrc_infer.slang 1135049000 634
-shaders/nrc_train.slang 992539735 725
+shaders/nrc_adam.slang 3330883392 956
+shaders/nrc_collect.slang 3523986626 10123
+shaders/nrc_infer.slang 3072844272 815
+shaders/nrc_train.slang 2193531265 1455
 shaders/pathtrace.slang 2358497555 989
 shaders/wf_args.slang 4231570597 886
 shaders/wf_extend.slang 1007081039 710
@@ -10,7 +11,8 @@ shaders/wf_select.slang 3332485939 496
 shaders/wf_shade.slang 1734737300 871
 shaders/include/dielectric_albedo.slang 2765503094 331
 shaders/include/ggx_albedo.slang 3601325883 275
-shaders/include/nrc_net.slang 3593182849 6625
-shaders/include/pt_core.slang 4043999763 72054
+shaders/include/nrc_backward.slang 1757705494 2700
+shaders/include/nrc_net.slang 2861157923 3852
+shaders/include/pt_core.slang 1365070015 73520
 shaders/include/sheen_albedo.slang 2304031180 281
 shaders/include/wf_state.slang 2095008147 4130

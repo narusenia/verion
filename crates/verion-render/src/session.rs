@@ -5,8 +5,8 @@ use std::sync::{
 
 use verion_denoise::{Denoiser, Device};
 use verion_gpu::{
-    Accumulation as _, Adaptive, Aovs, Integrator, LightingAovs, RayTracingBackend, Restir,
-    UpdateReport,
+    Accumulation as _, Adaptive, Aovs, Integrator, LightingAovs, NrcSettings, RayTracingBackend,
+    Restir, UpdateReport,
 };
 use verion_scene::Scene;
 use verion_stylization::ColorGrade;
@@ -36,6 +36,8 @@ pub struct Settings {
     /// ReSTIR. `None` is the plain path tracer, except in `Mode::Interactive`, which defaults to DI+GI.
     /// Rejected in Reference mode (its reuse is biased).
     pub restir: Option<Restir>,
+    /// The neural radiance cache (non-physical, excludes ReSTIR).
+    pub nrc: Option<NrcSettings>,
     /// Also read back the first-hit lighting split (always on in Stylized mode).
     pub lighting_aovs: bool,
     /// Random stream of the render; see `RayTracingBackend::set_seed`.
@@ -56,6 +58,7 @@ impl Settings {
             multiscatter: true,
             adaptive: None,
             restir: None,
+            nrc: None,
             lighting_aovs: false,
             seed: 0,
             denoise: None,
@@ -65,6 +68,7 @@ impl Settings {
 
     fn restir(&self) -> Option<Restir> {
         match (self.mode, self.restir) {
+            _ if self.nrc.is_some() => None,
             (Mode::Interactive, None) => Some(Restir {
                 gi: true,
                 ..Restir::default()
@@ -76,6 +80,14 @@ impl Settings {
     pub fn validate(&self) -> Result<(), String> {
         if self.width == 0 || self.height == 0 || self.spp == 0 {
             return Err("width, height and spp must be at least 1".into());
+        }
+        if self.mode.physical() && self.nrc.is_some() {
+            return Err(
+                "the neural radiance cache is not allowed in reference mode (it is biased)".into(),
+            );
+        }
+        if self.nrc.is_some() && self.restir.is_some() {
+            return Err("the neural radiance cache and ReSTIR exclude each other".into());
         }
         if self.mode.physical() && self.restir.is_some() {
             return Err("ReSTIR is not allowed in reference mode (its reuse is biased)".into());
@@ -102,6 +114,7 @@ impl Settings {
     pub fn physical(&self) -> bool {
         self.mode.physical()
             && self.restir.is_none()
+            && self.nrc.is_none()
             && self.adaptive.is_none()
             && self.denoise.is_none()
     }
@@ -223,6 +236,9 @@ impl<B: RayTracingBackend> Session<B> {
         self.renderer.set_adaptive(settings.adaptive);
         self.renderer.set_restir(settings.restir());
         self.renderer.set_seed(settings.seed);
+        self.renderer
+            .set_nrc(settings.nrc)
+            .map_err(|e| format!("nrc: {e:?}"))?;
         if let Some(d) = settings.denoise
             && self
                 .denoiser
@@ -336,5 +352,23 @@ impl<B: RayTracingBackend> Session<B> {
             }
         }
         self.frame(&mut run, true, true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nrc_is_biased_so_it_stays_out_of_reference_mode_and_excludes_restir() {
+        let mut s = Settings::new(Mode::Reference, 8, 8, 1);
+        s.nrc = Some(NrcSettings::default());
+        assert!(s.validate().is_err());
+        s.mode = Mode::Interactive;
+        assert!(s.validate().is_ok());
+        assert_eq!(s.restir(), None); // interactive mode's default ReSTIR yields to the cache
+        assert!(!s.physical());
+        s.restir = Some(Restir::default());
+        assert!(s.validate().is_err());
     }
 }

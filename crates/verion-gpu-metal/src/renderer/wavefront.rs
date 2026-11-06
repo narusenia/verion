@@ -32,12 +32,12 @@ pub(super) struct Pipelines {
 }
 
 impl Pipelines {
-    pub(super) fn new(ctx: &MetalContext, restir: bool) -> Result<Self, Error> {
+    pub(super) fn new(ctx: &MetalContext, restir: bool, nrc: bool) -> Result<Self, Error> {
         Ok(Self {
             args: pipeline(ctx, ARGS_MSL, "wf_args")?,
-            extend: pipeline_with(ctx, EXTEND_MSL, "wf_extend", restir)?,
-            shade: pipeline_with(ctx, SHADE_MSL, "wf_shade", restir)?,
-            select: pipeline_with(ctx, SELECT_MSL, "wf_select", restir)?,
+            extend: pipeline_with(ctx, EXTEND_MSL, "wf_extend", restir, nrc)?,
+            shade: pipeline_with(ctx, SHADE_MSL, "wf_shade", restir, nrc)?,
+            select: pipeline_with(ctx, SELECT_MSL, "wf_select", restir, nrc)?,
         })
     }
 }
@@ -97,8 +97,9 @@ impl Renderer {
         samples: u32,
     ) -> Result<(), Error> {
         let restir = self.restir.is_some();
-        let p =
-            self.wavefront[usize::from(restir)].get_or_init(|| Pipelines::new(&self.ctx, restir));
+        let nrc = self.nrc.is_some();
+        let p = self.wavefront[usize::from(restir) | (usize::from(nrc) << 1)]
+            .get_or_init(|| Pipelines::new(&self.ctx, restir, nrc));
         let p = p.as_ref().map_err(Clone::clone)?;
         let timed = self.stage_timing;
         let (w, h) = (acc.width as usize, acc.height as usize);

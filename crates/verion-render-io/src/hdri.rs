@@ -260,6 +260,7 @@ mod tests {
                 denoiser: None,
                 adaptive_threshold: None,
                 restir: None,
+                nrc: false,
             },
         };
         let path = temp("sky.exr");
