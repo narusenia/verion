@@ -22,32 +22,32 @@ float pf_0(uint i_0, KernelContext_0 thread* kernelContext_0)
 }
 
 
-#line 1573
+#line 1581
 bool pixelActive_0(uint p_0, KernelContext_0 thread* kernelContext_1)
 {
     uint _S1 = 3U * p_0;
 
-#line 1575
+#line 1583
     float device* _S2 = kernelContext_1->pixelStats_0+_S1;
 
-#line 1575
+#line 1583
     float n_0 = *_S2;
     if((*_S2) < float(kernelContext_1->params_0[int(34)]))
     {
 
-#line 1577
+#line 1585
         return true;
     }
 
-#line 1578
+#line 1586
     float mean_0 = *(kernelContext_1->pixelStats_0+(_S1 + 1U)) / n_0;
 
     float _S3 = sqrt(max(*(kernelContext_1->pixelStats_0+(_S1 + 2U)) / n_0 - mean_0 * mean_0, 0.0f) * n_0 / (n_0 - 1.0f) / n_0);
 
-#line 1580
+#line 1588
     float _S4 = pf_0(33U, kernelContext_1);
 
-#line 1580
+#line 1588
     return _S3 > (_S4 * max(mean_0, 0.05000000074505806f));
 }
 

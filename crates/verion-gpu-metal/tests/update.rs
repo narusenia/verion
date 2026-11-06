@@ -253,3 +253,31 @@ fn the_neural_radiance_cache_follows_a_wall_color_edit() {
         );
     }
 }
+
+/// Where the cache disagrees with a physical estimate the physical path tracer takes over (M7 item 5): a network that
+/// has not learned anything is kept out of most of the image, a trained one only of a small part.
+#[test]
+fn untrained_cache_tiles_fall_back_and_trained_ones_do_not() {
+    let Some(ctx) = context() else { return };
+    let room = room();
+    let mut r = Renderer::new(&ctx, &room.scene).unwrap();
+    let fallback = |r: &mut Renderer, settings: verion_gpu::NrcSettings| {
+        r.set_nrc(Some(settings)).unwrap();
+        let mut acc = r.new_accumulation(48, 48, false).unwrap();
+        r.accumulate(&mut acc, 8).unwrap();
+        r.set_nrc(None).unwrap();
+        r.nrc_fallback_tiles()
+    };
+    let untrained = fallback(
+        &mut r,
+        verion_gpu::NrcSettings {
+            warmup_steps: 0,
+            steps_per_spp: 0,
+            ..Default::default()
+        },
+    );
+    let mut r = Renderer::new(&ctx, &room.scene).unwrap();
+    let trained = fallback(&mut r, verion_gpu::NrcSettings::default());
+    assert!(untrained > 900, "{untrained} of 1024 tiles fell back");
+    assert!(trained < 100, "{trained} of 1024 tiles fell back");
+}

@@ -26,7 +26,7 @@ StructuredBuffer<uint> params;      // 0 width, 1 height, 2 tan(fov/2), 3 apertu
                                     // (float), 34 adaptive minimum samples, 35 megakernel samples per dispatch, 36 ReSTIR DI enable,
                                     // 37 ReSTIR initial candidates per pixel, 38 ReSTIR history cap (samples a reused reservoir counts for),
                                     // 39 / 40 lens shift x and y (floats, half-image extents), 41 virtual main light present, 42 transparent background, 43 seed (offsets the random streams),
-                                    // 44 neural radiance cache on, 45..47 its cube minimum, 48 its inverse extent (floats)
+                                    // 44 neural radiance cache on, 45..47 its cube minimum, 48 its inverse extent (floats), 49..80 its fallback tiles (bits)
 RWStructuredBuffer<float> accum;    // running radiance sum, xyz per pixel
 StructuredBuffer<float> emitters;   // 16 words per emissive world-space triangle: p0, p1, p2, radiance rgb, area, selection pdf, 2 pad
 StructuredBuffer<float> emitCdf;    // cumulative selection probability per emitter triangle, last entry 1
@@ -92,6 +92,14 @@ float pf(uint i) { return asfloat(params[i]); }
 // the reservoirs would. params[44] switches it on, 45..47 are the cube's minimum, 48 its inverse extent.
 #define nrcP restir
 float4 nrcBounds() { return float4(pf(45), pf(46), pf(47), pf(48)); }
+// Params 49..80 hold one bit per tile of a 32 x 32 grid over the image: set where nrc_validate found the cache
+// unreliable, so the physical path tracer takes over there.
+bool nrcFallback(uint pixel)
+{
+    uint w = params[0];
+    uint tile = (pixel / w * 32u / params[1]) * 32u + pixel % w * 32u / w;
+    return ((params[49 + tile / 32u] >> (tile % 32u)) & 1u) != 0;
+}
 #include "nrc_net.slang"
 
 float3 vertexPos(uint v) { return float3(positions[3 * v], positions[3 * v + 1], positions[3 * v + 2]); }
@@ -1230,7 +1238,7 @@ bool shadePath(inout PathState st, Hit hq, uint depth, uint pixel)
         // Neural radiance cache: the second vertex of a path whose first bounce was diffuse, on a surface that is only
         // diffuse (plus a specular coat the cache leaves out), ends the path; the cache stands in for the rest. Light
         // sampling there then takes the whole weight (no BSDF-sampled continuation to share it with).
-        bool nrcCut = nrcCompiled && params[44] != 0 && depth == 1 && cls == 0 && !st.gi
+        bool nrcCut = nrcCompiled && params[44] != 0 && depth == 1 && cls == 0 && !st.gi && !nrcFallback(pixel)
             && metallic == 0.0 && transmission == 0.0 && surf.coat == 0.0 && surf.sheenP == 0.0;
 
         // Next-event estimation for delta lights (no MIS: sampling can never hit them). Includes the

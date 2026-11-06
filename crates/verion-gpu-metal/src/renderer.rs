@@ -30,6 +30,26 @@ const NORMALS_MSL: &str = include_str!("../shaders/normals.metal");
 const AOV_MSL: &str = include_str!("../shaders/aov.metal");
 const PATHTRACE_MSL: &str = include_str!("../shaders/pathtrace.metal");
 const COLLECT_MSL: &str = include_str!("../shaders/nrc_collect.metal");
+const VALIDATE_MSL: &str = include_str!("../shaders/nrc_validate.metal");
+
+/// Tiles of the validation grid (32 x 32 over the image) and the samples each takes per call.
+const NRC_TILES: usize = 1024;
+const NRC_VAL_SAMPLES: u32 = 32;
+
+/// What the validation has seen so far, per tile (decayed sums of the cache's value, the physical value and the count).
+struct Validation {
+    sums: Vec<[f64; 3]>,
+    mask: [u32; NRC_TILES / 32],
+}
+
+impl Default for Validation {
+    fn default() -> Self {
+        Self {
+            sums: vec![[0.0; 3]; NRC_TILES],
+            mask: [0; NRC_TILES / 32],
+        }
+    }
+}
 
 type CommandBuffer = Obj<dyn objc2_metal::MTLCommandBuffer>;
 type Encoder = Obj<dyn MTLComputeCommandEncoder>;
@@ -157,6 +177,8 @@ pub struct Renderer {
     /// The cache's network, made when the first accumulation needs it and dropped when the scene is edited.
     nrc_net: RefCell<Option<NrcNet>>,
     collect: OnceCell<Result<Obj<dyn MTLComputePipelineState>, Error>>,
+    validate: OnceCell<Result<Obj<dyn MTLComputePipelineState>, Error>>,
+    nrc_val: RefCell<Validation>,
     /// Corner of the cube around the scene and its side, for the cache's positions.
     bounds: ([f32; 3], f32),
 }
@@ -239,6 +261,8 @@ impl Renderer {
             nrc: None,
             nrc_net: RefCell::new(None),
             collect: OnceCell::new(),
+            validate: OnceCell::new(),
+            nrc_val: RefCell::default(),
             bounds: scene.bounds().map_or(([0.0; 3], 1.0), |(lo, hi)| {
                 (lo, (0..3).map(|a| hi[a] - lo[a]).fold(1.0e-3, f32::max))
             }),
@@ -255,6 +279,7 @@ impl Renderer {
         // What the cache learned is about the scene as it was; it learns again from scratch (M7 item 6 measures following instead).
         if !changes.is_empty() {
             *self.nrc_net.get_mut() = None;
+            *self.nrc_val.get_mut() = Validation::default();
         }
         let mut report = UpdateReport::default();
         if plan.camera {
@@ -497,9 +522,10 @@ impl Renderer {
         &self,
         acc: &mut Accumulation,
         s: NrcSettings,
-        params: &[u32; PARAM_WORDS],
+        params: &mut [u32; PARAM_WORDS],
         samples: u32,
     ) -> Result<(), Error> {
+        params[49..49 + NRC_TILES / 32].copy_from_slice(&self.nrc_val.borrow().mask);
         let mut steps = s.steps_per_spp * samples;
         {
             let mut slot = self.nrc_net.borrow_mut();
@@ -550,7 +576,90 @@ impl Renderer {
             acc.train_seconds += net.train_buffer(&batch, s.batch as usize)?;
             acc.nrc_bytes = net.bytes() + len;
         }
+        if s.trust.is_finite() {
+            self.validate_nrc(acc, params, f64::from(s.trust))?;
+        }
         Ok(())
+    }
+
+    /// Compares the cache with a physical estimate in every tile of the image and sets the fallback bits of `params`
+    /// for the tiles where they disagree (`nrc_validate.slang`).
+    fn validate_nrc(
+        &self,
+        acc: &mut Accumulation,
+        params: &mut [u32; PARAM_WORDS],
+        trust: f64,
+    ) -> Result<(), Error> {
+        let pipe = self
+            .validate
+            .get_or_init(|| pipeline_with(&self.ctx, VALIDATE_MSL, "nrc_validate", false, true));
+        let pipe = pipe.as_ref().map_err(Clone::clone)?;
+        let out = self
+            .ctx
+            .device
+            .newBufferWithLength_options(
+                NRC_TILES * 3 * size_of::<f32>(),
+                MTLResourceOptions::StorageModeShared,
+            )
+            .ok_or(Error::Resource("nrc validation"))?;
+        let mut p = *params;
+        p[6] = self.nrc_net.borrow().as_ref().map_or(1, NrcNet::next_step);
+        p[31] = NRC_VAL_SAMPLES;
+        let (cb, enc) = self.open_encoder(acc, pipe)?;
+        // SAFETY: 20 is `nrcVal` of `shaders/nrc_validate.slang`; `p` outlives the call and Metal copies it.
+        unsafe {
+            enc.setBuffer_offset_atIndex(Some(&out), 0, 20);
+            enc.setBytes_length_atIndex(NonNull::from(&p).cast(), size_of_val(&p), 6);
+        }
+        enc.dispatchThreads_threadsPerThreadgroup(
+            MTLSize {
+                width: NRC_TILES * NRC_VAL_SAMPLES as usize,
+                height: 1,
+                depth: 1,
+            },
+            MTLSize {
+                width: 64,
+                height: 1,
+                depth: 1,
+            },
+        );
+        enc.endEncoding();
+        cb.commit();
+        cb.waitUntilCompleted();
+        acc.train_seconds += cb.GPUEndTime() - cb.GPUStartTime();
+        // SAFETY: shared memory of 3 floats per tile, finished by the wait above.
+        let seen = unsafe {
+            std::slice::from_raw_parts(out.contents().as_ptr().cast::<f32>(), NRC_TILES * 3)
+        };
+        let mut val = self.nrc_val.borrow_mut();
+        let Validation { sums, mask } = &mut *val;
+        for (t, (sum, new)) in sums.iter_mut().zip(seen.chunks(3)).enumerate() {
+            for (s, n) in sum.iter_mut().zip(new) {
+                *s = *s * 0.9 + f64::from(*n);
+            }
+            // Too few comparable samples (background, or surfaces the cache does not cover): leave the tile to the cache.
+            let bad = sum[2] >= 8.0 && {
+                let (cache, phys) = (sum[0] / sum[2], sum[1] / sum[2]);
+                (cache - phys).abs() > trust * phys.max(0.01)
+            };
+            if bad {
+                mask[t / 32] |= 1 << (t % 32);
+            } else {
+                mask[t / 32] &= !(1 << (t % 32));
+            }
+        }
+        params[49..49 + NRC_TILES / 32].copy_from_slice(mask);
+        Ok(())
+    }
+
+    /// Tiles of the validation grid the cache is currently kept out of (the physical path tracer draws them).
+    pub fn nrc_fallback_tiles(&self) -> usize {
+        self.nrc_val
+            .borrow()
+            .mask
+            .iter()
+            .map(|w| w.count_ones() as usize)
+            .sum()
     }
 
     /// # Safety
@@ -923,7 +1032,7 @@ impl RayTracingBackend for Renderer {
                 *dst = src.to_bits();
             }
             params[48] = (1.0 / self.bounds.1).to_bits();
-            self.train_nrc(acc, s, &params, samples)?;
+            self.train_nrc(acc, s, &mut params, samples)?;
         }
 
         if acc.samples == 0 {

@@ -12,7 +12,7 @@ use crate::{Adaptive, Restir};
 /// Path length limit. Radiance beyond it is dropped, so closed furnaces read slightly dark.
 pub const MAX_DEPTH: u32 = 8;
 /// Words of the parameter block; must match `params` in `shaders/include/pt_core.slang`.
-pub const PARAM_WORDS: usize = 49;
+pub const PARAM_WORDS: usize = 81;
 pub const MATERIAL_WORDS: usize = 24;
 pub const LIGHT_WORDS: usize = 16;
 

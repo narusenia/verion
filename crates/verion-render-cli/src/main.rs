@@ -165,6 +165,10 @@ struct Args {
     /// Training paths per `--nrc` step
     #[arg(long, default_value_t = 16384)]
     nrc_batch: u32,
+    /// A tile of the image goes back to path tracing where the cache's mean differs from a physical estimate by more
+    /// than this fraction (`inf` turns the check off)
+    #[arg(long, default_value_t = 0.5)]
+    nrc_trust: f32,
     /// Training steps `--nrc` takes before the first sample
     #[arg(long, default_value_t = 128)]
     nrc_warmup: u32,
@@ -347,6 +351,7 @@ fn run_with<Backend: verion_gpu::RayTracingBackend>(
             batch: args.nrc_batch,
             warmup_steps: args.nrc_warmup,
             steps_per_spp: 1,
+            trust: args.nrc_trust,
         }))
         .map_err(|e| format!("nrc: {e:?}"))?;
     renderer.set_adaptive(args.adaptive.map(|threshold| Adaptive {

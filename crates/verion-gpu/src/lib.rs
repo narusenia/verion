@@ -68,7 +68,7 @@ pub trait RayTracingBackend: Sized {
 /// accumulates, from short paths of its own, so the first samples are rough; the result is biased and non-physical.
 /// Surfaces that are not purely diffuse (metal, glass, coat, sheen) and every path whose first bounce is not
 /// diffuse keep the physical path tracer.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct NrcSettings {
     /// Training paths per step.
     pub batch: u32,
@@ -76,6 +76,9 @@ pub struct NrcSettings {
     pub warmup_steps: u32,
     /// Training steps per sample per pixel.
     pub steps_per_spp: u32,
+    /// A tile of the image goes back to the physical path tracer when the cache's mean there differs from a physical
+    /// estimate by more than this fraction of it. Infinite turns the check off (and its cost).
+    pub trust: f32,
 }
 
 impl Default for NrcSettings {
@@ -84,6 +87,7 @@ impl Default for NrcSettings {
             batch: 16384,
             warmup_steps: 128,
             steps_per_spp: 1,
+            trust: 0.5,
         }
     }
 }
