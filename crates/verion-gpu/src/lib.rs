@@ -39,6 +39,9 @@ pub trait RayTracingBackend: Sized {
     /// ReSTIR DI for accumulations started afterwards (REQ-ACC-002). `None` is the unbiased path
     /// tracer; Reference renders must leave it off.
     fn set_restir(&mut self, restir: Option<Restir>);
+    /// Offsets the random streams of accumulations started afterwards (0 by default), so two renders of one
+    /// scene are independent. The image's expectation does not change; evaluations take the spread over seeds.
+    fn set_seed(&mut self, seed: u32);
 
     /// An empty running sum; `lighting` adds the per-pixel buffers of the lighting split.
     fn new_accumulation(

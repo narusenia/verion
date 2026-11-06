@@ -38,6 +38,8 @@ pub struct Settings {
     pub restir: Option<Restir>,
     /// Also read back the first-hit lighting split (always on in Stylized mode).
     pub lighting_aovs: bool,
+    /// Random stream of the render; see `RayTracingBackend::set_seed`.
+    pub seed: u32,
     pub denoise: Option<Denoise>,
     /// Applied last; non-physical, so only Stylized mode may use it.
     pub grade: ColorGrade,
@@ -55,6 +57,7 @@ impl Settings {
             adaptive: None,
             restir: None,
             lighting_aovs: false,
+            seed: 0,
             denoise: None,
             grade: ColorGrade::default(),
         }
@@ -219,6 +222,7 @@ impl<B: RayTracingBackend> Session<B> {
         self.renderer.set_integrator(settings.integrator);
         self.renderer.set_adaptive(settings.adaptive);
         self.renderer.set_restir(settings.restir());
+        self.renderer.set_seed(settings.seed);
         if let Some(d) = settings.denoise
             && self
                 .denoiser

@@ -178,7 +178,7 @@ PathState_0 generatePathFor_0(uint px_0, uint py_0, uint sample_0, KernelContext
     uint h_0 = kernelContext_2->params_0[int(1)];
 
     thread Rng_0 rng_1;
-    (&rng_1)->state_1 = pcg_0((py_0 * w_1 + px_0) ^ (pcg_0(sample_0 * 2654435769U + 2135587861U)));
+    (&rng_1)->state_1 = pcg_0((py_0 * w_1 + px_0) ^ (pcg_0(sample_0 * 2654435769U + 2135587861U + kernelContext_2->params_0[int(43)] * 1759714724U)));
 
 #line 651
     float _S4 = pf_0(2U, kernelContext_2);

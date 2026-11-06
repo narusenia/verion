@@ -92,6 +92,7 @@ pub struct Renderer {
     stage_timing: bool,
     adaptive: Option<Adaptive>,
     restir: Option<Restir>,
+    seed: u32,
     /// Compiled on first use, so megakernel-only users skip the compile; indexed like `pathtrace`.
     wavefront: [OnceCell<Result<wavefront::Pipelines, Error>>; 2],
 }
@@ -152,6 +153,7 @@ impl Renderer {
             stage_timing: false,
             adaptive: None,
             restir: None,
+            seed: 0,
             wavefront: [OnceCell::new(), OnceCell::new()],
         })
     }
@@ -398,6 +400,10 @@ impl RayTracingBackend for Renderer {
         self.restir = restir;
     }
 
+    fn set_seed(&mut self, seed: u32) {
+        self.seed = seed;
+    }
+
     /// Applies scene edits, redoing only what `pack::UpdatePlan` says (REQ-ACC-003). The pipelines
     /// and descriptors are untouched: descriptor sets are made per `accumulate` from the buffers
     /// held here, so replacing a buffer is enough.
@@ -536,7 +542,7 @@ impl RayTracingBackend for Renderer {
     }
 
     fn accumulate(&self, acc: &mut Accumulation, samples: u32) -> Result<(), Error> {
-        let base = pack::base_params(
+        let mut base = pack::base_params(
             &self.info,
             &self.view,
             (acc.width, acc.height),
@@ -545,6 +551,7 @@ impl RayTracingBackend for Renderer {
             self.adaptive,
             self.restir,
         );
+        base[43] = self.seed;
         if acc.samples == 0 {
             acc.adaptive = self.adaptive;
             acc.restir = match self.restir {

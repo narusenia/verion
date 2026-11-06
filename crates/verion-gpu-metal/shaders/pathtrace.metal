@@ -187,7 +187,7 @@ PathState_0 generatePathFor_0(uint px_0, uint py_0, uint sample_0, KernelContext
     uint h_0 = kernelContext_2->params_0[int(1)];
 
     thread Rng_0 rng_1;
-    (&rng_1)->state_0 = pcg_0((py_0 * w_1 + px_0) ^ (pcg_0(sample_0 * 2654435769U + 2135587861U)));
+    (&rng_1)->state_0 = pcg_0((py_0 * w_1 + px_0) ^ (pcg_0(sample_0 * 2654435769U + 2135587861U + kernelContext_2->params_0[int(43)] * 1759714724U)));
 
 #line 651
     float _S6 = pf_0(2U, kernelContext_2);
@@ -6587,7 +6587,7 @@ float3 giFinish_0(float3 pathTotal_0, uint pixel_8, KernelContext_0 thread* kern
             float wOwn_0 = pOwn_0 / qPrev_1;
             float wsum_7 = wsum_5 + wOwn_0;
             thread Rng_0 r_8;
-            (&r_8)->state_0 = pcg_0(pixel_8 ^ (pcg_0(kernelContext_35->params_0[int(6)] * 2246822507U + 4660U)));
+            (&r_8)->state_0 = pcg_0(pixel_8 ^ (pcg_0(kernelContext_35->params_0[int(6)] * 2246822507U + 4660U + kernelContext_35->params_0[int(43)] * 1759714724U)));
             float _S394 = Rng_next_0(&r_8);
 
 #line 1593

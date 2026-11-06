@@ -25,7 +25,7 @@ StructuredBuffer<uint> params;      // 0 width, 1 height, 2 tan(fov/2), 3 apertu
                                     // 30 / 31 wavefront depth and path count, 32 adaptive sampling enable, 33 adaptive threshold
                                     // (float), 34 adaptive minimum samples, 35 megakernel samples per dispatch, 36 ReSTIR DI enable,
                                     // 37 ReSTIR initial candidates per pixel, 38 ReSTIR history cap (samples a reused reservoir counts for),
-                                    // 39 / 40 lens shift x and y (floats, half-image extents), 41 virtual main light present, 42 transparent background
+                                    // 39 / 40 lens shift x and y (floats, half-image extents), 41 virtual main light present, 42 transparent background, 43 seed (offsets the random streams)
 RWStructuredBuffer<float> accum;    // running radiance sum, xyz per pixel
 StructuredBuffer<float> emitters;   // 16 words per emissive world-space triangle: p0, p1, p2, radiance rgb, area, selection pdf, 2 pad
 StructuredBuffer<float> emitCdf;    // cumulative selection probability per emitter triangle, last entry 1
@@ -648,7 +648,7 @@ PathState generatePathFor(uint px, uint py, uint sample)
     uint h = params[1];
     uint pixel = py * w + px;
     Rng rng;
-    rng.state = pcg(pixel ^ pcg(sample * 0x9E3779B9u + 0x7F4A7C15u));
+    rng.state = pcg(pixel ^ pcg(sample * 0x9E3779B9u + 0x7F4A7C15u + params[43] * 0x68E31DA4u));
     float t = pf(2);
     float aspect = float(w) / float(h);
     float u = (2.0 * (px + rng.next()) / w - 1.0 + pf(39)) * aspect * t;
@@ -1589,7 +1589,7 @@ float3 giFinish(float3 pathTotal, uint pixel)
             float wOwn = pOwn / qPrev;
             wsum += wOwn;
             Rng r;
-            r.state = pcg(pixel ^ pcg(params[6] * 0x85EBCA6Bu + 0x1234u));
+            r.state = pcg(pixel ^ pcg(params[6] * 0x85EBCA6Bu + 0x1234u + params[43] * 0x68E31DA4u));
             if (r.next() * wsum < wOwn)
             {
                 pSel = pOwn;

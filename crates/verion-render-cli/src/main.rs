@@ -111,6 +111,9 @@ struct Args {
     /// Samples per pixel
     #[arg(long, default_value_t = 64)]
     spp: u32,
+    /// Random stream of the render (evaluations average over several seeds)
+    #[arg(long, default_value_t = 0)]
+    seed: u32,
     /// Equirectangular environment map (`.hdr` / `.exr`) used as the sky light
     #[arg(long)]
     hdri: Option<PathBuf>,
@@ -311,6 +314,7 @@ fn run_with<Backend: verion_gpu::RayTracingBackend>(
         IntegratorArg::Wavefront => Integrator::Wavefront,
     });
     renderer.set_stage_timing(args.stage_timing);
+    renderer.set_seed(args.seed);
     renderer.set_restir(restir.then_some(Restir {
         di: true,
         gi: restir_gi,

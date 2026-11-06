@@ -137,6 +137,7 @@ pub struct Renderer {
     stage_timing: bool,
     adaptive: Option<Adaptive>,
     restir: Option<Restir>,
+    seed: u32,
     /// Compiled on first use, so megakernel-only users skip the compile.
     wavefront: [OnceCell<Result<wavefront::Pipelines, Error>>; 2],
 }
@@ -214,6 +215,7 @@ impl Renderer {
             stage_timing: false,
             adaptive: None,
             restir: None,
+            seed: 0,
             wavefront: pipelines.3,
         })
     }
@@ -614,6 +616,10 @@ impl RayTracingBackend for Renderer {
         self.adaptive = adaptive;
     }
 
+    fn set_seed(&mut self, seed: u32) {
+        self.seed = seed;
+    }
+
     /// Turns ReSTIR DI on or off for accumulations started afterwards. It needs emissive
     /// triangles to do anything; without them the image is the plain path tracer's.
     fn set_restir(&mut self, restir: Option<Restir>) {
@@ -782,6 +788,7 @@ impl RayTracingBackend for Renderer {
             self.adaptive,
             self.restir,
         );
+        params[43] = self.seed;
 
         if acc.samples == 0 {
             acc.adaptive = self.adaptive;
