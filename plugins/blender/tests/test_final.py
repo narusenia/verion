@@ -50,6 +50,7 @@ class FinalTests(unittest.TestCase):
         render(adaptive=True)
         self.assertIn(b"Verion Adaptive Threshold", exr_header(os.path.join(TMP, "final.exr")))
 
+    @unittest.skipUnless(sys.platform == "darwin", "the cache is Metal only; Vulkan refuses it")
     def test_nrc_is_marked_and_reference_ignores_it(self):
         a = render(mode="INTERACTIVE", nrc=True)
         self.assertGreater(a.mean(), 0.05)

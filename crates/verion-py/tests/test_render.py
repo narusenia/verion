@@ -7,6 +7,7 @@ import base64
 import json
 import os
 import struct
+import sys
 import tempfile
 import unittest
 
@@ -151,8 +152,9 @@ class RenderTests(unittest.TestCase):
             render(build_scene(), restir={})  # biased: not allowed in reference mode
         with self.assertRaises(ValueError):
             render(build_scene(), nrc={})  # biased: not allowed in reference mode
-        r = render(build_scene(), mode="interactive", nrc={})
-        self.assertFalse(r["info"]["physical"])
+        if sys.platform == "darwin":  # the cache is Metal only; Vulkan refuses it
+            r = render(build_scene(), mode="interactive", nrc={})
+            self.assertFalse(r["info"]["physical"])
         with self.assertRaises(ValueError):
             render(build_scene(), bogus=1)
 
