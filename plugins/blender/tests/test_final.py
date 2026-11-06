@@ -50,6 +50,17 @@ class FinalTests(unittest.TestCase):
         render(adaptive=True)
         self.assertIn(b"Verion Adaptive Threshold", exr_header(os.path.join(TMP, "final.exr")))
 
+    def test_nrc_is_marked_and_reference_ignores_it(self):
+        a = render(mode="INTERACTIVE", nrc=True)
+        self.assertGreater(a.mean(), 0.05)
+        h = exr_header(os.path.join(TMP, "final.exr"))
+        self.assertIn(b"Verion NRC", h)
+        self.assertNotIn(b"Verion ReSTIR", h)  # the cache replaces it
+        render(nrc=True)  # Reference stays physical: the switch is not sent
+        h = exr_header(os.path.join(TMP, "final.exr"))
+        self.assertNotIn(b"Verion NRC", h)
+        self.assertIn(b"true", h)
+
     def test_pass_arrays(self):
         from verion_blender import engine, native
 

@@ -150,6 +150,10 @@ class RenderTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             render(build_scene(), restir={})  # biased: not allowed in reference mode
         with self.assertRaises(ValueError):
+            render(build_scene(), nrc={})  # biased: not allowed in reference mode
+        r = render(build_scene(), mode="interactive", nrc={})
+        self.assertFalse(r["info"]["physical"])
+        with self.assertRaises(ValueError):
             render(build_scene(), bogus=1)
 
     def test_stylized_returns_the_lighting_split(self):

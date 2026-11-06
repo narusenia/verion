@@ -213,6 +213,10 @@ pub struct App {
     /// ReSTIR DI (REQ-ACC-002): faster to a clean image with many emitters; biased, so not physical.
     restir: bool,
     restir_gi: bool,
+    /// Neural radiance cache (M7): learns the indirect light; opt-in, biased, excludes ReSTIR. `nrc_error` is why the
+    /// backend refused it (the Vulkan backend has none yet).
+    nrc: bool,
+    nrc_error: Option<String>,
     /// Pixels that still take samples, counted after each accumulate.
     active: usize,
     /// Denoise the finished (or paused) accumulation with OIDN (ADR-0013).
@@ -334,6 +338,8 @@ impl App {
             adaptive_threshold: Adaptive::default().threshold,
             restir: false,
             restir_gi: false,
+            nrc: false,
+            nrc_error: None,
             active: (w * h) as usize,
             denoise: false,
             denoiser: None,
@@ -996,9 +1002,12 @@ impl App {
             self.renderer.set_adaptive(self.adaptive_setting());
             self.restart();
         }
-        let mut restir_changed =
-            widgets::checkbox(ui, &mut self.restir, "ReSTIR DI (many emitters)");
-        ui.add_enabled_ui(self.restir, |ui| {
+        let mut restir_changed = ui
+            .add_enabled_ui(!self.nrc, |ui| {
+                widgets::checkbox(ui, &mut self.restir, "ReSTIR DI (many emitters)")
+            })
+            .inner;
+        ui.add_enabled_ui(self.restir && !self.nrc, |ui| {
             restir_changed |=
                 widgets::checkbox(ui, &mut self.restir_gi, "ReSTIR GI (indirect light)");
         });
@@ -1017,6 +1026,20 @@ impl App {
             .small()
             .color(MUTED),
         );
+        if widgets::checkbox(ui, &mut self.nrc, "Neural radiance cache (indirect light)") {
+            self.apply_nrc();
+        }
+        ui.label(
+            RichText::new(
+                "Learns the indirect light while rendering; helps long paths in indoor scenes. \
+                 Replaces ReSTIR, and is biased, so not physical",
+            )
+            .small()
+            .color(MUTED),
+        );
+        if let Some(e) = &self.nrc_error {
+            ui.colored_label(WARNING, e);
+        }
         if widgets::checkbox(ui, &mut self.denoise, "Denoise when done (OIDN)") {
             self.dirty = true;
         }
@@ -1025,6 +1048,25 @@ impl App {
         {
             ui.colored_label(WARNING, e);
         }
+    }
+
+    /// Sends the cache switch (and ReSTIR, which it replaces) to the backend; a refusal turns the switch back off.
+    fn apply_nrc(&mut self) {
+        let nrc = self.nrc.then(verion_gpu::NrcSettings::default);
+        self.nrc_error = self
+            .renderer
+            .set_nrc(nrc)
+            .err()
+            .map(|e| format!("Neural radiance cache unavailable: {e:?}"));
+        if self.nrc_error.is_some() {
+            self.nrc = false;
+        }
+        self.renderer
+            .set_restir((self.restir && !self.nrc).then(|| verion_gpu::Restir {
+                gi: self.restir_gi,
+                ..verion_gpu::Restir::default()
+            }));
+        self.restart();
     }
 
     fn display_section(&mut self, ui: &mut egui::Ui) {

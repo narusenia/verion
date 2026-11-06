@@ -53,6 +53,11 @@ class VerionSceneSettings(bpy.types.PropertyGroup):
     restir_gi: BoolProperty(name="ReSTIR GI", default=True)
     restir_candidates: IntProperty(name="Candidates", default=4, min=1)
     restir_history: IntProperty(name="History", default=4, min=1)
+    nrc: BoolProperty(
+        name="Neural Radiance Cache",
+        description="Learn the indirect light while rendering; replaces ReSTIR, Metal only (not physical)",
+        default=False,
+    )
 
     denoise: BoolProperty(name="Denoise", description="Intel Open Image Denoise (not physical)", default=False)
     viewport_denoise: BoolProperty(
@@ -92,7 +97,9 @@ class VerionSceneSettings(bpy.types.PropertyGroup):
         }
         if final and self.adaptive:
             d["adaptive"] = {"threshold": self.adaptive_threshold, "min_spp": self.adaptive_min_samples}
-        if self.restir and mode != "REFERENCE":
+        if self.nrc and mode != "REFERENCE":
+            d["nrc"] = {}
+        elif self.restir and mode != "REFERENCE":
             d["restir"] = {"gi": self.restir_gi, "candidates": self.restir_candidates, "history": self.restir_history}
         if self.denoise if final else self.viewport_denoise:
             d["denoise"] = {"device": self.denoise_device.lower(), "stage": self.denoise_stage.lower()}

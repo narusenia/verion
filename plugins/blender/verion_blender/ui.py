@@ -97,6 +97,20 @@ class VERION_PT_restir(VerionPanel, bpy.types.Panel):
         col.prop(s, "restir_history")
 
 
+class VERION_PT_nrc(VerionPanel, bpy.types.Panel):
+    bl_label = "Neural Radiance Cache"
+    bl_parent_id = "VERION_PT_sampling"
+    bl_options = {"DEFAULT_CLOSED"}
+
+    def draw_header(self, context):
+        self.layout.prop(context.scene.verion, "nrc", text="")
+
+    def draw(self, context):
+        col = self.layout.column()
+        col.active = context.scene.verion.nrc
+        col.label(text="Learns indirect light; replaces ReSTIR. Not physical.")
+
+
 class VERION_PT_denoise(VerionPanel, bpy.types.Panel):
     bl_label = "Denoise"
     bl_options = {"DEFAULT_CLOSED"}
@@ -122,6 +136,7 @@ classes = (
     VERION_PT_viewport,
     VERION_PT_adaptive,
     VERION_PT_restir,
+    VERION_PT_nrc,
     VERION_PT_denoise,
 )
 

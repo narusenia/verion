@@ -1,7 +1,7 @@
 //! The settings dict of `Engine.start`, checked key by key so a typo is an error, not a silent default.
 
 use pyo3::{prelude::*, types::PyDict};
-use verion_gpu::{Adaptive, Integrator, Restir};
+use verion_gpu::{Adaptive, Integrator, NrcSettings, Restir};
 use verion_render::{Denoise, DenoiseDevice, DenoiseStage, Mode, Settings};
 use verion_stylization::ColorGrade;
 
@@ -22,6 +22,7 @@ const KEYS: &[&str] = &[
     "multiscatter",
     "adaptive",
     "restir",
+    "nrc",
     "lighting_aovs",
     "denoise",
     "grade",
@@ -111,6 +112,15 @@ pub fn parse(d: &Bound<'_, PyDict>) -> PyResult<JobSettings> {
             gi: get(&r, "gi")?.unwrap_or(def.gi),
             candidates: get(&r, "candidates")?.unwrap_or(def.candidates),
             history: get(&r, "history")?.unwrap_or(def.history),
+        });
+    }
+    if let Some(n) = get_dict(d, "nrc")? {
+        let def = NrcSettings::default();
+        s.nrc = Some(NrcSettings {
+            batch: get(&n, "batch")?.unwrap_or(def.batch),
+            warmup_steps: get(&n, "warmup_steps")?.unwrap_or(def.warmup_steps),
+            steps_per_spp: get(&n, "steps_per_spp")?.unwrap_or(def.steps_per_spp),
+            trust: get(&n, "trust")?.unwrap_or(def.trust),
         });
     }
     if let Some(n) = get_dict(d, "denoise")? {

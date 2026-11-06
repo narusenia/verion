@@ -249,8 +249,11 @@ def stamp_fields(settings, info):
     }
     if settings.adaptive:
         f["Verion Adaptive Threshold"] = str(settings.adaptive_threshold)
-    if settings.restir or settings.mode == "INTERACTIVE":
+    nrc = settings.nrc and settings.mode != "REFERENCE"
+    if (settings.restir or settings.mode == "INTERACTIVE") and not nrc:
         f["Verion ReSTIR"] = "di+gi" if settings.restir_gi or settings.mode == "INTERACTIVE" else "di"
+    if nrc:
+        f["Verion NRC"] = "true"
     if settings.denoise:
         f["Verion Denoiser"] = "oidn"
     return f

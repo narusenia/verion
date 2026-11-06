@@ -60,7 +60,7 @@ def settings_key(settings):
     return tuple(
         getattr(settings, k) for k in (
             "mode", "viewport_samples", "viewport_restir", "integrator", "multiscatter", "restir",
-            "restir_gi", "restir_candidates", "restir_history", "clean_samples", "viewport_scale",
+            "restir_gi", "restir_candidates", "restir_history", "nrc", "clean_samples", "viewport_scale",
             "viewport_denoise", "denoise_device", "denoise_stage",
         )
     )
